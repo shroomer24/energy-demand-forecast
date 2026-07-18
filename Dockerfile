@@ -18,12 +18,11 @@ COPY src/ ./src/
 COPY api/ ./api/
 COPY frontend/ ./frontend/
 
-# Copy pre-trained model artifacts if they exist
-COPY data/*.pkl ./data/ 2>/dev/null || true
-COPY data/demand.csv ./data/ 2>/dev/null || true
+# Copy pre-trained model artifacts (committed to git via scripts/export_models.py)
+COPY models/ ./models/
 
 # Ensure data & logs directories exist
-RUN mkdir -p data/charts logs mlruns
+RUN mkdir -p data/charts logs mlruns models
 
 # Environment
 ENV PYTHONPATH=/app
