@@ -2,8 +2,7 @@
 
 **End-to-end ML pipeline for hourly electricity demand forecasting on the PJM Interconnection grid.**
 
-Built by **Ram Aligave** · Business Analytics BBA · University of North Texas · Dec 2027  
-Contact: ram.aligave1@gmail.com · (469) 422-0627 · Allen, TX
+Built by **Ram Aligave** · Business Analytics BBA · University of North Texas · Dec 2027
 
 ---
 
