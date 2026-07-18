@@ -1,0 +1,57 @@
+apiVersion: ai.sap.com/v1alpha1
+kind: ServingTemplate
+metadata:
+  name: energy-forecast-server
+  annotations:
+    scenarios.ai.sap.com/description: "PJM hourly electricity demand forecasting pipeline"
+    scenarios.ai.sap.com/name: "energy-forecast"
+    executables.ai.sap.com/description: "XGBoost energy demand forecast — 0.75% MAPE on 4.5yr PJM data"
+    executables.ai.sap.com/name: "energy-forecast-server"
+  labels:
+    scenarios.ai.sap.com/id: "energy-forecast"
+    ai.sap.com/version: "1.0.0"
+spec:
+  template:
+    apiVersion: serving.kserve.io/v1beta1
+    metadata:
+      annotations:
+        autoscaling.knative.dev/metric: concurrency
+        autoscaling.knative.dev/target: "1"
+        autoscaling.knative.dev/targetBurstCapacity: "0"
+    spec:
+      predictor:
+        imagePullSecrets:
+          - name: docker-registry-secret       # registered via register_deploy.py
+        containers:
+          - name: kserve-container
+            image: "rali24/energy-forecast-server:v1"
+            ports:
+              - containerPort: 8080
+                protocol: TCP
+            command: ["/bin/sh", "-c"]
+            args:
+              - "uvicorn serve:app --host 0.0.0.0 --port 8080"
+            env:
+              - name: MODEL_PATH
+                value: "/app/models/xgb_model.pkl"
+              - name: DATA_PATH
+                value: "/app/models/demand_seed.csv"
+            resources:
+              requests:
+                cpu: "0.5"
+                memory: "1Gi"
+              limits:
+                cpu: "1"
+                memory: "2Gi"
+            livenessProbe:
+              httpGet:
+                path: /health
+                port: 8080
+              initialDelaySeconds: 30
+              periodSeconds: 30
+            readinessProbe:
+              httpGet:
+                path: /v2/health/ready
+                port: 8080
+              initialDelaySeconds: 20
+              periodSeconds: 10

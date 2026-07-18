@@ -1,0 +1,34 @@
+# render.yaml
+# -----------
+# SAP AI Core is the production target; Render provides a public demo URL
+# for portfolio/interview purposes.
+#
+# Deploy steps:
+#   1. Run  python3 scripts/export_models.py   (copies trained models → models/)
+#   2. Run  python3 aicore/export_seed.py       (exports demand_seed.csv → data/)
+#   3. Run  python3 scripts/export_models.py   (copies seed → models/ too)
+#   4. git add models/ && git commit -m "Add trained models"
+#   5. git push origin main
+#   6. Connect repo at https://dashboard.render.com → New Web Service
+#   7. Set environment variables in Render dashboard (see envVars below)
+#
+# The free tier spins down after 15 min inactivity (cold start ~30s).
+
+services:
+  - type: web
+    name: energy-forecast
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: EIA_API_KEY
+        sync: false          # set manually in Render dashboard
+      - key: TABPFN_API_KEY
+        sync: false          # optional
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: PYTHONDONTWRITEBYTECODE
+        value: "1"

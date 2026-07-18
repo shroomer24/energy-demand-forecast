@@ -1,0 +1,60 @@
+# ── Secrets ──────────────────────────────────────────────────────────────────
+.env
+EnergyForecast.json
+
+# ── Generated data (large files, not for git) ─────────────────────────────────
+data/demand.csv
+data/xgb_model.pkl
+data/tabpfn_model.pkl
+data/interval_models.pkl
+data/sarima_model.pkl
+data/xgb_predictions.csv
+data/tabpfn_predictions.csv
+data/sarima_predictions.csv
+data/feature_importances.csv
+data/features.csv
+data/backtest_results.csv
+data/retrain_state.json
+data/charts/
+data/shap_summary.png
+data/shap_importance.png
+data/demand_seed.csv
+
+# ── models/ is TRACKED in git (pre-exported for Render deployment) ────────────
+# models/*.pkl and models/*.csv and models/*.png are intentionally committed
+!models/
+!models/**
+
+# ── MLflow runs ───────────────────────────────────────────────────────────────
+mlruns/
+
+# ── TabPFN model cache ────────────────────────────────────────────────────────
+~/.cache/tabpfn/
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+logs/
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+venv/
+.venv/
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── pytest ────────────────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage

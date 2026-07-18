@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PJM Energy Demand Forecasting Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #FFFFFF;
+      --bg2:       #F4F5F7;
+      --bg3:       #E1E2E6;
+      --card:      #FFFFFF;
+      --border:    #D1D4DA;
+      --text:      #1D2329;
+      --text2:     #556070;
+      --accent:    #0070F2;
+      --accent2:   #4CB1FF;
+      --danger:    #FF6B35;
+      --success:   #24A259;
+      --shadow:    0 2px 8px rgba(0,0,0,0.07);
+    }
+
+    body {
+      font-family: "72 Brand", "72", "SAP72", "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg2);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    /* ── Header ───────────────────────────────────── */
+    header {
+      background: var(--accent);
+      color: #fff;
+      padding: 0 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 58px;
+      box-shadow: 0 2px 6px rgba(0,112,242,0.25);
+    }
+    header .brand { display: flex; align-items: center; gap: 12px; }
+    header .brand svg { width: 42px; height: 24px; }
+    header h1 { font-size: 17px; font-weight: 700; letter-spacing: -0.2px; }
+    header .subtitle { font-size: 12px; opacity: .85; }
+    .badge {
+      background: rgba(255,255,255,0.18);
+      border-radius: 12px;
+      padding: 4px 12px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    /* ── Main layout ─────────────────────────────── */
+    .container { max-width: 1280px; margin: 0 auto; padding: 28px 24px; }
+
+    /* ── Controls bar ────────────────────────────── */
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 20px;
+      margin-bottom: 24px;
+      box-shadow: var(--shadow);
+    }
+    .controls label { font-size: 13px; font-weight: 600; color: var(--text2); }
+    .controls input[type=number] {
+      width: 80px;
+      padding: 6px 10px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 13px;
+      color: var(--text);
+      background: var(--bg2);
+    }
+    .controls select {
+      padding: 6px 10px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 13px;
+      color: var(--text);
+      background: var(--bg2);
+    }
+    .btn {
+      padding: 8px 22px;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.1s;
+    }
+    .btn:active { transform: scale(0.97); }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover { opacity: 0.88; }
+    .btn-secondary { background: var(--bg3); color: var(--text); }
+    .btn-secondary:hover { opacity: 0.75; }
+    .status-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+    .status-ok  { background: var(--success); }
+    .status-err { background: var(--danger); }
+    #status-msg { font-size: 12px; color: var(--text2); }
+
+    /* ── Metric cards ────────────────────────────── */
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px 18px;
+      box-shadow: var(--shadow);
+    }
+    .card .card-label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .6px;
+      color: var(--text2);
+      margin-bottom: 6px;
+    }
+    .card .card-value {
+      font-size: 26px;
+      font-weight: 800;
+      color: var(--accent);
+      line-height: 1.1;
+    }
+    .card .card-sub {
+      font-size: 11px;
+      color: var(--text2);
+      margin-top: 3px;
+    }
+    .card.highlight { border-left: 3px solid var(--accent); }
+
+    /* ── Chart container ─────────────────────────── */
+    .chart-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 22px 24px;
+      box-shadow: var(--shadow);
+      margin-bottom: 24px;
+    }
+    .chart-card h2 {
+      font-size: 15px;
+      font-weight: 700;
+      margin-bottom: 16px;
+      color: var(--text);
+    }
+    .chart-wrapper { position: relative; height: 320px; }
+
+    /* ── Forecast table ──────────────────────────── */
+    .table-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .table-card h2 {
+      font-size: 15px;
+      font-weight: 700;
+      padding: 18px 22px 10px;
+      color: var(--text);
+    }
+    .table-scroll { overflow-x: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    thead th {
+      background: var(--bg2);
+      padding: 10px 16px;
+      text-align: left;
+      font-weight: 700;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      color: var(--text2);
+      border-bottom: 1px solid var(--border);
+    }
+    tbody tr { border-bottom: 1px solid var(--border); }
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: var(--bg2); }
+    tbody td { padding: 9px 16px; }
+    .pill {
+      display: inline-block;
+      padding: 2px 9px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .pill-blue  { background: #E1F4FF; color: #0070F2; }
+    .pill-green { background: #D6F5E3; color: #1A7F47; }
+
+    .spinner {
+      display: none;
+      width: 18px; height: 18px;
+      border: 3px solid rgba(0,112,242,0.2);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      margin-left: 8px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading .spinner { display: inline-block; }
+
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: var(--text2);
+    }
+    .empty-state p { font-size: 14px; margin-top: 8px; }
+    .shap-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 22px 24px;
+      box-shadow: var(--shadow);
+      margin-top: 24px;
+    }
+    .shap-card h2 {
+      font-size: 15px;
+      font-weight: 700;
+      margin-bottom: 6px;
+      color: var(--text);
+    }
+    .shap-card .shap-sub {
+      font-size: 12px;
+      color: var(--text2);
+      margin-bottom: 16px;
+    }
+    .shap-card img {
+      max-width: 100%;
+      height: auto;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+    }
+    .shap-tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .tab-btn {
+      padding: 5px 14px;
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      background: var(--bg2);
+      color: var(--text2);
+      transition: all 0.15s;
+    }
+    .tab-btn.active {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <!-- SAP logo inline SVG (white) -->
+    <svg viewBox="0 0 42 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="SAP">
+      <rect width="42" height="24" rx="2" fill="#007DB8"/>
+      <path d="M5 17V8h4.2c1.6 0 2.8 1 2.8 2.6 0 1.8-1.3 2.7-2.9 2.7H7.2V17H5zm2.2-5.6h1.7c.7 0 1.1-.4 1.1-1.1 0-.6-.4-1-1.1-1H7.2v2.1zM15.8 8l3.4 9h-2.4l-.6-1.9h-3.1l-.6 1.9H10l3.4-9h2.4zm-2.1 5.3h2l-1-3.1-1 3.1zM21.5 8h4.3c1.7 0 2.9 1 2.9 2.7 0 1.9-1.3 2.7-3 2.7h-2V17h-2.2V8zm2.2 3.7h1.8c.7 0 1.1-.4 1.1-1.1 0-.6-.4-1-1.1-1h-1.8v2.1z" fill="white"/>
+    </svg>
+    <div>
+      <div style="font-size:15px;font-weight:800;">Energy Demand Forecasting</div>
+      <div style="font-size:11px;opacity:.8;">MLflow on live PJM grid data using XGBoost</div>
+    </div>
+  </div>
+  <div class="badge">ML Portfolio · Ram Aligave · UNT 2027</div>
+</header>
+
+<div class="container">
+
+  <!-- Controls -->
+  <div class="controls">
+    <label for="hours-input">Forecast horizon:</label>
+    <input type="number" id="hours-input" value="72" min="1" max="336" step="24" />
+    <label for="hours-input" style="margin-left:-8px">hours</label>
+
+    <button class="btn btn-primary" id="run-btn" onclick="runForecast()">
+      Run Forecast
+      <span class="spinner" id="spinner"></span>
+    </button>
+
+    <button class="btn btn-secondary" onclick="loadLatest()">Load Latest 72h</button>
+
+    <div id="status-msg">
+      <span class="status-dot" id="dot"></span>
+      <span id="status-text">Not connected</span>
+    </div>
+  </div>
+
+  <!-- Metric cards -->
+  <div class="metrics">
+    <div class="card highlight">
+      <div class="card-label">Model</div>
+      <div class="card-value" id="card-model" style="font-size:17px;">—</div>
+      <div class="card-sub">Active inference model</div>
+    </div>
+    <div class="card highlight">
+      <div class="card-label">Forecast Hours</div>
+      <div class="card-value" id="card-hours">—</div>
+      <div class="card-sub">Horizon requested</div>
+    </div>
+    <div class="card highlight">
+      <div class="card-label">MAPE</div>
+      <div class="card-value" id="card-mape">—</div>
+      <div class="card-sub">Test-set accuracy</div>
+    </div>
+    <div class="card highlight">
+      <div class="card-label">Peak GW</div>
+      <div class="card-value" id="card-peak">—</div>
+      <div class="card-sub">Maximum forecast demand</div>
+    </div>
+    <div class="card highlight">
+      <div class="card-label">Avg GW</div>
+      <div class="card-value" id="card-avg">—</div>
+      <div class="card-sub">Mean forecast demand</div>
+    </div>
+  </div>
+
+  <!-- Chart -->
+  <div class="chart-card">
+    <h2>Hourly Electricity Demand Forecast — PJM Interconnection</h2>
+    <div class="chart-wrapper">
+      <canvas id="forecast-chart"></canvas>
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div class="table-card">
+    <h2>Forecast Detail</h2>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Timestamp</th>
+            <th>Day</th>
+            <th>Hour</th>
+            <th>Demand (GW)</th>
+            <th>Lower 10% (GW)</th>
+            <th>Upper 90% (GW)</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="forecast-tbody">
+          <tr>
+            <td colspan="8">
+              <div class="empty-state">
+                <strong>No forecast loaded</strong>
+                <p>Click "Run Forecast" or "Load Latest 72h" to generate predictions.</p>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- SHAP Feature Importance -->
+  <div class="shap-card">
+    <h2>Model Explainability — SHAP Analysis</h2>
+    <div class="shap-sub">Which features drive XGBoost predictions? Computed via TreeExplainer on 2,000 test samples.</div>
+    <div class="shap-tabs">
+      <button class="tab-btn active" onclick="showSHAP('importance', this)">Feature Importance</button>
+      <button class="tab-btn" onclick="showSHAP('summary', this)">Beeswarm Summary</button>
+    </div>
+    <div id="shap-container">
+      <div class="empty-state">
+        <strong>Loading SHAP chart...</strong>
+        <p>Run <code>python3 -m src.explain</code> if this does not load.</p>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  const API = "http://localhost:8001";
+  const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  let chart = null;
+
+  /* ── Chart initialisation ─────────────────────── */
+  function initChart() {
+    const ctx = document.getElementById("forecast-chart").getContext("2d");
+    chart = new Chart(ctx, {
+      type: "line",
+      data: { labels: [], datasets: [] },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { position: "top", labels: { font: { size: 12 } } },
+          tooltip: {
+            callbacks: {
+              label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)} GW`
+            }
+          }
+        },
+        scales: {
+          x: {
+            ticks: { maxTicksLimit: 12, font: { size: 11 } },
+            grid: { color: "#E1E2E6" }
+          },
+          y: {
+            title: { display: true, text: "Demand (GW)", font: { size: 12 } },
+            grid: { color: "#E1E2E6" }
+          }
+        }
+      }
+    });
+  }
+
+  /* ── Render chart from API response ─────────────── */
+  function renderChart(points) {
+    const labels   = points.map(p => {
+      const d = new Date(p.timestamp);
+      return `${(d.getMonth()+1).toString().padStart(2,"0")}/${d.getDate().toString().padStart(2,"0")} ${d.getHours().toString().padStart(2,"0")}:00`;
+    });
+    const midline  = points.map(p => p.demand_gw);
+    const hasCI    = points.some(p => p.lower_gw !== null);
+    const lower    = hasCI ? points.map(p => p.lower_gw ?? p.demand_gw) : [];
+    const upper    = hasCI ? points.map(p => p.upper_gw ?? p.demand_gw) : [];
+
+    chart.data.labels = labels;
+    chart.data.datasets = [];
+
+    if (hasCI) {
+      // Upper bound (invisible, used for fill)
+      chart.data.datasets.push({
+        label: "Upper 90%",
+        data: upper,
+        borderColor: "transparent",
+        backgroundColor: "rgba(0,112,242,0.12)",
+        fill: "+1",
+        pointRadius: 0,
+        tension: 0.3,
+      });
+    }
+
+    // Forecast midline
+    chart.data.datasets.push({
+      label: "Forecast (GW)",
+      data: midline,
+      borderColor: "#0070F2",
+      backgroundColor: "rgba(0,112,242,0.06)",
+      fill: hasCI ? false : "origin",
+      borderWidth: 2,
+      pointRadius: 0,
+      tension: 0.3,
+    });
+
+    if (hasCI) {
+      // Lower bound
+      chart.data.datasets.push({
+        label: "Lower 10%",
+        data: lower,
+        borderColor: "transparent",
+        backgroundColor: "rgba(0,112,242,0.12)",
+        fill: "-1",
+        pointRadius: 0,
+        tension: 0.3,
+      });
+    }
+
+    chart.update();
+  }
+
+  /* ── Render table ─────────────────────────────── */
+  function renderTable(points) {
+    const tbody = document.getElementById("forecast-tbody");
+    tbody.innerHTML = "";
+    points.forEach((p, i) => {
+      const d = new Date(p.timestamp);
+      const day = DAYS[d.getDay()];
+      const hour = d.getHours().toString().padStart(2,"0") + ":00";
+      const isHigh = p.demand_gw > 65;
+      const pill = isHigh
+        ? `<span class="pill pill-blue">High load</span>`
+        : `<span class="pill pill-green">Normal</span>`;
+      const lo = p.lower_gw !== null ? p.lower_gw.toFixed(2) : "—";
+      const hi = p.upper_gw !== null ? p.upper_gw.toFixed(2) : "—";
+      const ts = d.toLocaleString("en-US", {month:"2-digit",day:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit",hour12:false});
+      tbody.insertAdjacentHTML("beforeend", `
+        <tr>
+          <td>${i+1}</td>
+          <td>${ts}</td>
+          <td>${day}</td>
+          <td>${hour}</td>
+          <td><strong>${p.demand_gw.toFixed(2)}</strong></td>
+          <td style="color:#556070">${lo}</td>
+          <td style="color:#556070">${hi}</td>
+          <td>${pill}</td>
+        </tr>
+      `);
+    });
+  }
+
+  /* ── Update metric cards ─────────────────────── */
+  function updateCards(data) {
+    document.getElementById("card-model").textContent = data.model || "—";
+    document.getElementById("card-hours").textContent = data.hours_requested ?? "—";
+    document.getElementById("card-mape").textContent  =
+      (data.metrics?.mape_pct !== undefined) ? `${data.metrics.mape_pct}%` : "1.52%";
+    document.getElementById("card-peak").textContent  = data.metrics?.peak_gw?.toFixed(2) ?? "—";
+    document.getElementById("card-avg").textContent   = data.metrics?.avg_gw?.toFixed(2) ?? "—";
+  }
+
+  /* ── Status dot helper ───────────────────────── */
+  function setStatus(ok, msg) {
+    document.getElementById("dot").className = `status-dot ${ok ? "status-ok" : "status-err"}`;
+    document.getElementById("status-text").textContent = msg;
+  }
+
+  /* ── Run forecast (POST /forecast/intervals) ─── */
+  async function runForecast() {
+    const hours = parseInt(document.getElementById("hours-input").value) || 72;
+    const btn   = document.getElementById("run-btn");
+    btn.classList.add("loading");
+    setStatus(false, "Fetching forecast…");
+
+    try {
+      const resp = await fetch(`${API}/forecast/intervals`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hours })
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      renderChart(data.points);
+      renderTable(data.points);
+      updateCards(data);
+      setStatus(true, `Loaded ${data.points.length} forecast points · ${new Date().toLocaleTimeString()}`);
+    } catch (e) {
+      setStatus(false, `Error: ${e.message}`);
+      console.error(e);
+    } finally {
+      btn.classList.remove("loading");
+    }
+  }
+
+  /* ── Load latest (GET /forecast/latest) ─────── */
+  async function loadLatest() {
+    setStatus(false, "Loading latest forecast…");
+    try {
+      const resp = await fetch(`${API}/forecast/latest`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      document.getElementById("hours-input").value = 72;
+      renderChart(data.points);
+      renderTable(data.points);
+      updateCards(data);
+      setStatus(true, `Latest 72h loaded · ${new Date().toLocaleTimeString()}`);
+    } catch (e) {
+      setStatus(false, `Error: ${e.message}`);
+    }
+  }
+
+  /* ── Health check on load ────────────────────── */
+  async function checkHealth() {
+    try {
+      const r = await fetch(`${API}/health`);
+      if (r.ok) setStatus(true, "API connected · ready");
+      else setStatus(false, `API error: ${r.status}`);
+    } catch {
+      setStatus(false, "API offline — start uvicorn on port 8001");
+    }
+  }
+
+  /* ── SHAP chart loader ───────────────────────── */
+  async function loadSHAP(type = "importance") {
+    const endpoint = type === "summary" ? `${API}/explain/shap/summary` : `${API}/explain/shap`;
+    try {
+      const resp = await fetch(endpoint);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const blob = await resp.blob();
+      const url  = URL.createObjectURL(blob);
+      document.getElementById("shap-container").innerHTML =
+        `<img src="${url}" alt="SHAP ${type} chart" />`;
+    } catch {
+      document.getElementById("shap-container").innerHTML =
+        `<div class="empty-state"><p>SHAP chart not available — run <strong>python3 -m src.explain</strong> then restart the server.</p></div>`;
+    }
+  }
+
+  function showSHAP(type, btn) {
+    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    loadSHAP(type);
+  }
+
+  /* ── Init ────────────────────────────────────── */
+  initChart();
+  checkHealth();
+  loadSHAP("importance");
+</script>
+</body>
+</html>
