@@ -410,50 +410,49 @@ def forecast_latest():
 @app.post("/forecast/tabpfn", response_model=ForecastResponse)
 def forecast_tabpfn(req: ForecastRequest):
     """
-    TabPFN-3 point forecast using the time-series checkpoint.
-
-    Falls back to XGBoost if the TabPFN model is not loaded (i.e., if
-    train_tabpfn.py has not been run yet). Run `python src/train_tabpfn.py`
-    first to generate data/tabpfn_model.pkl.
-
-    TabPFN predicts via in-context learning: the training set is the context
-    and each forecast step is a fresh forward pass. For sequential multi-step
-    forecasting, we use the same rolling-history approach as the XGBoost
-    endpoint to propagate predictions into future lag features.
+    TabPFN-3 forecast served from pre-computed benchmark predictions CSV.
+    Falls back gracefully when the live model is not loaded.
     """
+    pred_path = Path(__file__).parent.parent / "data" / "tabpfn_predictions.csv"
+
     if _state["tabpfn_model"] is None:
-        if not TABPFN_PRED_PATH.exists():
-            raise HTTPException(status_code=503,
-                detail="TabPFN-3 predictions not found. Run: python src/train_tabpfn.py")
+        if not pred_path.exists():
+            raise HTTPException(
+                status_code=503,
+                detail="TabPFN-3 predictions not found. Run: python src/train_tabpfn.py"
+            )
         try:
-            preds_df = pd.read_csv(TABPFN_PRED_PATH)
+            preds_df = pd.read_csv(pred_path)
             preds_df["timestamp"] = pd.to_datetime(preds_df["timestamp"])
             preds_df["_hour"] = preds_df["timestamp"].dt.hour
             preds_df["_dow"]  = preds_df["timestamp"].dt.dayofweek
-            lookup = (preds_df.groupby(["_hour", "_dow"])["tabpfn_pred"]
-                      .mean().to_dict())
+            lookup   = preds_df.groupby(["_hour","_dow"])["tabpfn_pred"].mean().to_dict()
             fallback = float(preds_df["tabpfn_pred"].mean())
-            start_ts = pd.Timestamp.now("UTC").replace(tzinfo=None).floor("h")
-            results = []
+            start_ts = pd.Timestamp.utcnow().floor("h")
+            results  = []
             for h in range(req.hours):
                 ts   = start_ts + pd.Timedelta(hours=h)
                 pred = lookup.get((ts.hour, ts.dayofweek), fallback)
                 results.append({"timestamp": ts.isoformat(),
                                  "demand_gw": round(float(pred), 3),
-                                 "lower_gw": None, "upper_gw": None})
+                                 "lower_gw":  None,
+                                 "upper_gw":  None})
             vals = [p["demand_gw"] for p in results]
             return ForecastResponse(
                 model="TabPFN-3 (pre-computed benchmark)",
                 generated_at=datetime.utcnow().isoformat(),
                 hours_requested=req.hours,
                 points=[ForecastPoint(**p) for p in results],
-                metrics={"peak_gw": round(max(vals), 3),
-                         "avg_gw":  round(sum(vals)/len(vals), 3),
-                         "mape_pct": 0.52, "mae_gw": 0.494},
+                metrics={"peak_gw":  round(max(vals), 3),
+                         "avg_gw":   round(sum(vals)/len(vals), 3),
+                         "mape_pct": 0.52,
+                         "mae_gw":   0.494},
             )
         except Exception as exc:
             raise HTTPException(status_code=500,
-                detail=f"TabPFN CSV serving error: {exc}")
+                detail=f"TabPFN CSV error: {exc}")
+
+    # Live model path (local inference, not used on CF deployment)
     start_ts = (
         pd.Timestamp(req.start_timestamp)
         if req.start_timestamp
@@ -461,53 +460,40 @@ def forecast_tabpfn(req: ForecastRequest):
               if _state["last_ts"] is not None
               else pd.Timestamp.now().floor("h"))
     )
-
-    # Use TabPFN's feature columns (same as XGBoost in practice)
-    feature_cols = _state["tabpfn_feature_cols"] or _state["feature_cols"]
-    model        = _state["tabpfn_model"]
-    metrics      = _state["tabpfn_metrics"]
-
-    history_size = 200
-    demand_p = _find("demand_seed.csv") or _find("demand.csv")
-    if demand_p:
-        df   = pd.read_csv(demand_p, parse_dates=["timestamp"])
+    feature_cols   = _state["tabpfn_feature_cols"] or _state["feature_cols"]
+    model          = _state["tabpfn_model"]
+    metrics        = _state["tabpfn_metrics"]
+    history_size   = 200
+    if DATA_PATH.exists():
+        df   = pd.read_csv(DATA_PATH, parse_dates=["timestamp"])
         seed = df.sort_values("timestamp").tail(history_size)["demand_gw"].reset_index(drop=True)
     else:
         seed = pd.Series([50.0] * history_size)
-
-    demand_history  = seed.copy()
-    running_history = demand_history.values.tolist()
-    results         = []
-
+    demand_history = seed.copy()
+    results        = []
     for h in range(req.hours):
         ts  = start_ts + timedelta(hours=h)
-        idx = len(running_history)
-        row = _build_feature_row(ts, pd.Series(running_history), idx)
-        X = pd.DataFrame([row])[feature_cols].fillna(0)
-
+        idx = len(demand_history) + h
+        row = _build_feature_row(
+            ts,
+            pd.concat([demand_history, pd.Series([0.0] * h)], ignore_index=True),
+            idx,
+        )
+        X    = pd.DataFrame([row])[feature_cols].fillna(0)
         pred = float(model.predict(X.values)[0])
-        running_history.append(pred)   # feed prediction back into lag buffer
-        results.append({
-            "timestamp": ts.isoformat(),
-            "demand_gw": round(pred, 3),
-            "lower_gw":  None,
-            "upper_gw":  None,
-        })
-
+        results.append({"timestamp": ts.isoformat(), "demand_gw": round(pred, 3),
+                        "lower_gw": None, "upper_gw": None})
     vals = [p["demand_gw"] for p in results]
     return ForecastResponse(
         model="TabPFN-3 (time-series checkpoint)",
         generated_at=datetime.utcnow().isoformat(),
         hours_requested=req.hours,
         points=[ForecastPoint(**p) for p in results],
-        metrics={
-            "peak_gw":  round(max(vals), 3),
-            "avg_gw":   round(sum(vals) / len(vals), 3),
-            "mape_pct": round(metrics.get("mape", 0), 2),
-            "mae_gw":   round(metrics.get("mae", 0), 3),
-        },
+        metrics={"peak_gw":  round(max(vals), 3),
+                 "avg_gw":   round(sum(vals)/len(vals), 3),
+                 "mape_pct": round(metrics.get("mape", 0), 2),
+                 "mae_gw":   round(metrics.get("mae", 0), 3)},
     )
-
 
 @app.get("/explain/shap")
 def explain_shap():
