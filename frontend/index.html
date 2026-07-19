@@ -280,7 +280,7 @@
     </svg>
     <div>
       <div style="font-size:15px;font-weight:800;">Energy Demand Forecasting</div>
-      <div style="font-size:11px;opacity:.8;">MLflow on live PJM grid data using XGBoost</div>
+      <div style="font-size:11px;opacity:.8;">Live PJM grid data · XGBoost + TabPFN-3</div>
     </div>
   </div>
   <div class="badge">ML Portfolio · Ram Aligave · UNT 2027</div>
@@ -294,6 +294,11 @@
     <input type="number" id="hours-input" value="72" min="1" max="336" step="24" />
     <label for="hours-input" style="margin-left:-8px">hours</label>
 
+    <div style="display:flex;gap:4px;align-items:center;margin-left:8px;">
+      <span style="font-size:12px;color:#556070;font-weight:600;">Model:</span>
+      <button class="tab-btn active" id="btn-xgb" onclick="selectModel('xgboost', this)">XGBoost + CI</button>
+      <button class="tab-btn" id="btn-tabpfn" onclick="selectModel('tabpfn', this)">TabPFN-3</button>
+    </div>
     <button class="btn btn-primary" id="run-btn" onclick="runForecast()">
       Run Forecast
       <span class="spinner" id="spinner"></span>
@@ -377,7 +382,7 @@
 
   <!-- SHAP Feature Importance -->
   <div class="shap-card">
-    <h2>Model Explainability — SHAP Analysis</h2>
+    <h2>Model Explainability — SHAP Analysis <span style="font-size:12px;font-weight:400;color:#556070;">(XGBoost)</span></h2>
     <div class="shap-sub">Which features drive XGBoost predictions? Computed via TreeExplainer on 2,000 test samples.</div>
     <div class="shap-tabs">
       <button class="tab-btn active" onclick="showSHAP('importance', this)">Feature Importance</button>
@@ -397,6 +402,14 @@
   const API = window.location.origin;
   const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
   let chart = null;
+  let activeModel = "xgboost";
+
+  function selectModel(model, btn) {
+    activeModel = model;
+    document.querySelectorAll("#btn-xgb, #btn-tabpfn").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    document.querySelector(".shap-card").style.display = model === "tabpfn" ? "none" : "block";
+  }
 
   /* ── Chart initialisation ─────────────────────── */
   function initChart() {
@@ -459,10 +472,10 @@
 
     // Forecast midline
     chart.data.datasets.push({
-      label: "Forecast (GW)",
+      label: activeModel === "tabpfn" ? "TabPFN-3 Forecast (GW)" : "XGBoost Forecast (GW)",
       data: midline,
-      borderColor: "#0070F2",
-      backgroundColor: "rgba(0,112,242,0.06)",
+      borderColor: activeModel === "tabpfn" ? "#E86835" : "#0070F2",
+      backgroundColor: activeModel === "tabpfn" ? "rgba(232,104,53,0.08)" : "rgba(0,112,242,0.06)",
       fill: hasCI ? false : "origin",
       borderWidth: 2,
       pointRadius: 0,
@@ -533,13 +546,15 @@
 
   /* ── Run forecast (POST /forecast/intervals) ─── */
   async function runForecast() {
-    const hours = parseInt(document.getElementById("hours-input").value) || 72;
-    const btn   = document.getElementById("run-btn");
+    const hours    = parseInt(document.getElementById("hours-input").value) || 72;
+    const btn      = document.getElementById("run-btn");
+    const endpoint = activeModel === "tabpfn" ? `${API}/forecast/tabpfn` : `${API}/forecast/intervals`;
+    const label    = activeModel === "tabpfn" ? "TabPFN-3" : "XGBoost + CI";
     btn.classList.add("loading");
-    setStatus(false, "Fetching forecast…");
+    setStatus(false, `Fetching ${label} forecast…`);
 
     try {
-      const resp = await fetch(`${API}/forecast/intervals`, {
+      const resp = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ hours })
@@ -549,7 +564,7 @@
       renderChart(data.points);
       renderTable(data.points);
       updateCards(data);
-      setStatus(true, `Loaded ${data.points.length} forecast points · ${new Date().toLocaleTimeString()}`);
+      setStatus(true, `${label} · ${data.points.length} points · ${new Date().toLocaleTimeString()}`);
     } catch (e) {
       setStatus(false, `Error: ${e.message}`);
       console.error(e);
@@ -603,7 +618,7 @@
   }
 
   function showSHAP(type, btn) {
-    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".shap-tabs .tab-btn").forEach(b => b.classList.remove("active"));
     btn.classList.add("active");
     loadSHAP(type);
   }
