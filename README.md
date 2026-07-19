@@ -8,7 +8,7 @@ Built by **Ram Aligave** · Business Analytics BBA · University of North Texas 
 
 ## Project Summary
 
-This project benchmarks XGBoost against SARIMA for short-term energy demand forecasting using three years (2022–2024) of real hourly demand data from the U.S. Energy Information Administration (EIA) API.  Key results:
+This project benchmarks XGBoost against SARIMA for short-term energy demand forecasting using three years (2022–2026) of real hourly demand data from the U.S. Energy Information Administration (EIA) API.  Key results:
 
 | Model   | MAE (GW) | RMSE (GW) | MAPE   |
 |---------|----------|-----------|--------|
