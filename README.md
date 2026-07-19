@@ -77,7 +77,7 @@ sudo ln -s $(brew --prefix libomp)/lib/libomp.dylib /usr/local/lib/libomp.dylib
 
 ```bash
 cp .env.example .env
-# Edit .env and set EIA_API_KEY=<your key from https://www.eia.gov/opendata/>
+# Edit .env and set EIA_API_KEY=<your key from 
 ```
 
 ### 3. Run the full pipeline
