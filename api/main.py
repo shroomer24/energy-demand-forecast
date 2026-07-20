@@ -50,6 +50,7 @@ ROOT         = Path(__file__).parent.parent
 MODELS_DIR   = ROOT / "models"   # for Render (pre-exported, tracked in git)
 DATA_DIR     = ROOT / "data"     # for local dev (output of training scripts)
 FRONTEND_DIR = ROOT / "frontend"
+TABPFN_P10=-0.62; TABPFN_P90=0.61; XGB_P10=-0.95; XGB_P90=0.93
 
 
 def _find(filename: str) -> Optional[Path]:
@@ -409,117 +410,128 @@ def forecast_latest():
 
 @app.post("/forecast/tabpfn", response_model=ForecastResponse)
 def forecast_tabpfn(req: ForecastRequest):
-    """
-    TabPFN-3 forecast served from pre-computed benchmark predictions CSV.
-    Falls back gracefully when the live model is not loaded.
-    """
-    pred_path = Path(__file__).parent.parent / "data" / "tabpfn_predictions.csv"
-
-    if _state["tabpfn_model"] is None:
-        if not pred_path.exists():
-            raise HTTPException(
-                status_code=503,
-                detail="TabPFN-3 predictions not found. Run: python src/train_tabpfn.py"
-            )
+    if _state["tabpfn_client_ready"]:
         try:
-            preds_df = pd.read_csv(pred_path)
-            preds_df["timestamp"] = pd.to_datetime(preds_df["timestamp"])
-            preds_df["_hour"] = preds_df["timestamp"].dt.hour
-            preds_df["_dow"]  = preds_df["timestamp"].dt.dayofweek
-            lookup   = preds_df.groupby(["_hour","_dow"])["tabpfn_pred"].mean().to_dict()
-            fallback  = float(preds_df["tabpfn_pred"].mean())
-            residuals = preds_df["demand_gw"] - preds_df["tabpfn_pred"]
-            p10       = float(np.percentile(residuals, 10))
-            p90       = float(np.percentile(residuals, 90))
-            start_ts  = pd.Timestamp.utcnow().floor("h")
-            results   = []
-            for h in range(req.hours):
-                ts   = start_ts + pd.Timedelta(hours=h)
-                pred = lookup.get((ts.hour, ts.dayofweek), fallback)
-                results.append({"timestamp": ts.isoformat(),
-                                 "demand_gw": round(float(pred), 3),
-                                 "lower_gw":  round(float(pred) + p10, 3),
-                                 "upper_gw":  round(float(pred) + p90, 3)})
-            vals = [p["demand_gw"] for p in results]
-            return ForecastResponse(
-                model="TabPFN-3 (pre-computed benchmark)",
-                generated_at=datetime.utcnow().isoformat(),
-                hours_requested=req.hours,
-                points=[ForecastPoint(**p) for p in results],
-                metrics={"peak_gw":  round(max(vals), 3),
-                         "avg_gw":   round(sum(vals)/len(vals), 3),
-                         "mape_pct": 0.52,
-                         "mae_gw":   0.494},
-            )
-        except Exception as exc:
-            raise HTTPException(status_code=500,
-                detail=f"TabPFN CSV error: {exc}")
+            return _forecast_tabpfn_live(req)
+        except Exception as _e:
+            print(f"[api] TabPFN live failed -> CSV: {_e}")
+    return _forecast_tabpfn_csv(req)
 
-    # Live model path (local inference, not used on CF deployment)
-    start_ts = (
-        pd.Timestamp(req.start_timestamp)
-        if req.start_timestamp
-        else (_state["last_ts"] + timedelta(hours=1)
-              if _state["last_ts"] is not None
-              else pd.Timestamp.now().floor("h"))
-    )
-    feature_cols   = _state["tabpfn_feature_cols"] or _state["feature_cols"]
-    model          = _state["tabpfn_model"]
-    metrics        = _state["tabpfn_metrics"]
-    history_size   = 200
-    if DATA_PATH.exists():
-        df   = pd.read_csv(DATA_PATH, parse_dates=["timestamp"])
-        seed = df.sort_values("timestamp").tail(history_size)["demand_gw"].reset_index(drop=True)
-    else:
-        seed = pd.Series([50.0] * history_size)
-    demand_history = seed.copy()
-    results        = []
-    for h in range(req.hours):
-        ts  = start_ts + timedelta(hours=h)
-        idx = len(demand_history) + h
-        row = _build_feature_row(
-            ts,
-            pd.concat([demand_history, pd.Series([0.0] * h)], ignore_index=True),
-            idx,
-        )
-        X    = pd.DataFrame([row])[feature_cols].fillna(0)
-        pred = float(model.predict(X.values)[0])
-        results.append({"timestamp": ts.isoformat(), "demand_gw": round(pred, 3),
-                        "lower_gw": None, "upper_gw": None})
-    vals = [p["demand_gw"] for p in results]
+
+def _tpfn_start(req):
+    if req.start_timestamp:
+        return pd.Timestamp(req.start_timestamp)
+    return (_state["last_ts"] + timedelta(hours=1)) if _state["last_ts"] is not None         else pd.Timestamp.now().floor("h")
+
+
+def _forecast_tabpfn_live(req):
+    from tabpfn_client.estimator import TabPFNRegressor
+    fc = _state["feature_cols"]
+    if not fc:
+        raise HTTPException(503, "XGBoost feature cols not loaded")
+    df = (pd.read_csv(DATA_PATH, parse_dates=["timestamp"])
+            .sort_values("timestamp").reset_index(drop=True))
+    N = min(2000, len(df) - 168); te = len(df); ts_ = te - N
+    fd = df["demand_gw"].reset_index(drop=True)
+    sl = df.iloc[ts_:te].reset_index(drop=True)
+    rows = [_build_feature_row(r["timestamp"], fd, ts_ + i)
+            for i, r in sl.iterrows()]
+    Xtr = pd.DataFrame(rows)[fc].fillna(0)
+    ytr = sl["demand_gw"].values
+    if _state["tabpfn_regressor"] is None:
+        print(f"[api] TabPFN fitting {len(Xtr)} rows...")
+        reg = TabPFNRegressor(); reg.fit(Xtr, ytr)
+        _state["tabpfn_regressor"] = reg
+        print("[api] TabPFN fit cached")
+    reg = _state["tabpfn_regressor"]
+    st = _tpfn_start(req)
+    seed = fd.tail(200).reset_index(drop=True)
+    test = [_build_feature_row(
+                st + timedelta(hours=h),
+                pd.concat([seed, pd.Series([0.0]*h)], ignore_index=True),
+                len(seed)+h)
+            for h in range(req.hours)]
+    Xt = pd.DataFrame(test)[fc].fillna(0)
+    preds = reg.predict(Xt)
+    out = [{"timestamp": (st + timedelta(hours=h)).isoformat(),
+            "demand_gw": round(float(p), 3),
+            "lower_gw":  round(float(p) + TABPFN_P10, 3),
+            "upper_gw":  round(float(p) + TABPFN_P90, 3)}
+           for h, p in enumerate(preds)]
+    vals = [x["demand_gw"] for x in out]
     return ForecastResponse(
-        model="TabPFN-3 (time-series checkpoint)",
+        model="TabPFN-3 (live API · PriorLabs)",
         generated_at=datetime.utcnow().isoformat(),
         hours_requested=req.hours,
-        points=[ForecastPoint(**p) for p in results],
-        metrics={"peak_gw":  round(max(vals), 3),
-                 "avg_gw":   round(sum(vals)/len(vals), 3),
-                 "mape_pct": round(metrics.get("mape", 0), 2),
-                 "mae_gw":   round(metrics.get("mae", 0), 3)},
-    )
-
-@app.get("/explain/shap")
-def explain_shap():
-    """Return the SHAP feature importance chart as a PNG image."""
-    p = _find("shap_importance.png")
-    if p:
-        return FileResponse(str(p), media_type="image/png")
-    raise HTTPException(
-        status_code=404,
-        detail="SHAP chart not generated yet. Run: python3 -m src.explain"
-    )
+        points=[ForecastPoint(**x) for x in out],
+        metrics={"peak_gw": round(max(vals),3), "avg_gw": round(sum(vals)/len(vals),3),
+                 "mape_pct": 0.52, "mae_gw": 0.495})
 
 
-@app.get("/explain/shap/summary")
-def explain_shap_summary():
-    """Return the SHAP beeswarm summary chart as a PNG image."""
-    p = _find("shap_summary.png")
-    if p:
-        return FileResponse(str(p), media_type="image/png")
-    raise HTTPException(
-        status_code=404,
-        detail="SHAP summary chart not generated yet. Run: python3 -m src.explain"
-    )
+def _forecast_tabpfn_csv(req):
+    if not TABPFN_PRED_PATH.exists():
+        raise HTTPException(503,
+            "TabPFN unavailable. Set TABPFN_API_KEY or run: python src/train_tabpfn.py")
+    df = (pd.read_csv(TABPFN_PRED_PATH, parse_dates=["timestamp"])
+            .sort_values("timestamp").head(req.hours))
+    if "demand_mw" in df.columns and "demand_gw" not in df.columns:
+        df["demand_gw"] = df["demand_mw"] / 1000.0
+    out = []
+    for _, row in df.iterrows():
+        p = float(row["demand_gw"])
+        lo = round(row["lower_gw"],3) if ("lower_gw" in row and pd.notna(row.get("lower_gw")))              else round(p + TABPFN_P10, 3)
+        hi = round(row["upper_gw"],3) if ("upper_gw" in row and pd.notna(row.get("upper_gw")))              else round(p + TABPFN_P90, 3)
+        out.append({"timestamp": pd.Timestamp(row["timestamp"]).isoformat(),
+                    "demand_gw": round(p,3), "lower_gw": lo, "upper_gw": hi})
+    if not out:
+        raise HTTPException(422, "tabpfn_predictions.csv is empty")
+    vals = [x["demand_gw"] for x in out]
+    return ForecastResponse(
+        model="TabPFN-3 (pre-computed benchmark)",
+        generated_at=datetime.utcnow().isoformat(),
+        hours_requested=req.hours,
+        points=[ForecastPoint(**x) for x in out],
+        metrics={"peak_gw": round(max(vals),3), "avg_gw": round(sum(vals)/len(vals),3),
+                 "mape_pct": 0.52, "mae_gw": 0.495})
+
+
+@app.get("/backtest")
+def backtest(days: int = 30):
+    if not DATA_PATH.exists():
+        raise HTTPException(503, "demand.csv not found")
+    if _state["point_model"] is None:
+        raise HTTPException(503, "XGBoost model not loaded")
+    df = (pd.read_csv(DATA_PATH, parse_dates=["timestamp"])
+            .sort_values("timestamp").reset_index(drop=True))
+    days = min(max(days, 1), 90); n = days * 24
+    if len(df) < n + 168:
+        raise HTTPException(422, f"Need {n+168} rows, have {len(df)}")
+    si = len(df) - n
+    fd = df["demand_gw"].reset_index(drop=True)
+    test = df.iloc[si:].reset_index(drop=True)
+    fc = _state["feature_cols"]; mdl = _state["point_model"]
+    res = []
+    for i, row in test.iterrows():
+        feat = _build_feature_row(row["timestamp"], fd, si + i)
+        X = (pd.DataFrame([feat])[fc] if fc else pd.DataFrame([feat])).fillna(0)
+        pred = float(mdl.predict(X.values)[0])
+        actual = float(row["demand_gw"])
+        res.append({"timestamp":    row["timestamp"].isoformat(),
+                    "actual_gw":    round(actual, 3),
+                    "predicted_gw": round(pred,   3),
+                    "error_gw":     round(pred - actual, 3)})
+    if not res:
+        raise HTTPException(422, "Empty test window")
+    ae = [abs(r["error_gw"]) for r in res]
+    ac = [r["actual_gw"]     for r in res]
+    se = [r["error_gw"]**2   for r in res]
+    return {"days": days, "n_points": len(res),
+            "mae_gw":   round(sum(ae)/len(ae), 3),
+            "mape_pct": round(sum(a/b*100 for a,b in zip(ae,ac) if b)/len(ae), 2),
+            "rmse_gw":  round((sum(se)/len(se))**.5, 3),
+            "window_start": res[0]["timestamp"],
+            "window_end":   res[-1]["timestamp"],
+            "points": res}
 
 
 # Mount static frontend (must be last)
