@@ -644,11 +644,11 @@
 
       <div class="hours-wrap">
         <span class="toolbar-label">Horizon:</span>
-        <span class="toolbar-label" style="font-weight:700;color:var(--text)">72h</span>
+        <input type="number" class="hours-input" id="hours-input" value="72" min="1" max="336" step="24" />
+        <span class="toolbar-label">hours</span>
       </div>
 
       <div class="toolbar-sep"></div>
-
 
       <button class="action-btn btn-primary" id="run-btn" onclick="runForecast()">
         Run Forecast
@@ -762,7 +762,7 @@
 
   <!-- ── Footer ────────────────────────────────────────────────── -->
   <div class="page-footer">
-    PJM Energy Demand Forecasting &nbsp;·&nbsp; Ram Aligave &nbsp;·&nbsp; UNT Business Analytics 2027 &nbsp;·&nbsp; v1.3.0
+    PJM Energy Demand Forecasting &nbsp;·&nbsp; Ram Aligave &nbsp;·&nbsp; UNT Business Analytics 2027 &nbsp;·&nbsp; v1.1.0
   </div>
 
 </div><!-- /page -->
@@ -1046,7 +1046,7 @@
      RUN FORECAST
   ════════════════════════════════════════════════════════════════ */
   async function runForecast() {
-    const hours = selectedHours;
+    const hours = parseInt(document.getElementById("hours-input").value) || 72;
     const btn   = document.getElementById("run-btn");
     const label = activeModel === "tabpfn" ? "TabPFN-3" : "XGBoost + CI";
 
