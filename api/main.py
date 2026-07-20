@@ -410,7 +410,7 @@ def forecast_latest():
 
 @app.post("/forecast/tabpfn", response_model=ForecastResponse)
 def forecast_tabpfn(req: ForecastRequest):
-    if _state["tabpfn_client_ready"]:
+    if _state.get("tabpfn_client_ready"):
         try:
             return _forecast_tabpfn_live(req)
         except Exception as _e:

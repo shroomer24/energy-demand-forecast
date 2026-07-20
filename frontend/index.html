@@ -4,73 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PJM Energy Demand Forecasting — Dashboard</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js">
-  let backtestChart = null;
-  async function loadBacktest() {
-    if (PREVIEW) return;
-    const btn = document.getElementById("backtest-btn");
-    btn.classList.add("loading");
-    setStatus(false, "Loading 30-day backtest...");
-    try {
-      const r = await fetch(API + "/backtest?days=30");
-      if (!r.ok) throw new Error("HTTP " + r.status);
-      const d = await r.json();
-      document.getElementById("bt-mae").textContent  = d.mae_gw  + " GW";
-      document.getElementById("bt-mape").textContent = d.mape_pct + "%";
-      document.getElementById("bt-rmse").textContent = d.rmse_gw + " GW";
-      document.getElementById("bt-pts").textContent  = d.n_points;
-      const lbs = d.points.map(p => {
-        const t = new Date(p.timestamp);
-        return String(t.getMonth()+1).padStart(2,"0") + "/" +
-               String(t.getDate()).padStart(2,"0") + " " +
-               String(t.getHours()).padStart(2,"0") + ":00";
-      });
-      const act = d.points.map(p => p.actual_gw);
-      const prd = d.points.map(p => p.predicted_gw);
-      if (backtestChart) {
-        backtestChart.data.labels = lbs;
-        backtestChart.data.datasets[0].data = act;
-        backtestChart.data.datasets[1].data = prd;
-        backtestChart.update();
-      } else {
-        const ctx = document.getElementById("backtest-chart").getContext("2d");
-        backtestChart = new Chart(ctx, {
-          type: "line",
-          data: { labels: lbs, datasets: [
-            { label: "Actual (PJM)", data: act, borderColor: "#8696A9",
-              backgroundColor: "rgba(134,150,169,0.05)", borderWidth: 1.5,
-              pointRadius: 0, tension: 0.25, fill: false },
-            { label: "XGBoost Predicted", data: prd, borderColor: "#0064D9",
-              backgroundColor: "transparent", borderWidth: 2, borderDash: [4,3],
-              pointRadius: 0, tension: 0.25, fill: false }
-          ]},
-          options: {
-            responsive: true, maintainAspectRatio: false,
-            interaction: { mode: "index", intersect: false },
-            plugins: {
-              legend: { position: "top", labels: { font: { size: 12 }, boxWidth: 14, padding: 16 }},
-              tooltip: { backgroundColor: "#FFFFFF", titleColor: "#1D2D3E",
-                bodyColor: "#556B82", borderColor: "#D9DADB", borderWidth: 1, padding: 10,
-                callbacks: { label: function(c) { return c.dataset.label + ": " + c.parsed.y.toFixed(2) + " GW"; }}}
-            },
-            scales: {
-              x: { ticks: { maxTicksLimit: 15, font: { size: 11 }, color: "#8696A9" }, grid: { color: "#F0F1F2" }},
-              y: { title: { display: true, text: "Demand (GW)", font: { size: 12 }, color: "#556B82" },
-                   ticks: { font: { size: 11 }, color: "#8696A9" }, grid: { color: "#F0F1F2" }}
-            }
-          }
-        });
-      }
-      document.getElementById("backtest-card").style.display = "";
-      setStatus(true, "Backtest loaded · MAE " + d.mae_gw + " GW · MAPE " + d.mape_pct + "% · " + new Date().toLocaleTimeString());
-    } catch(e) {
-      setStatus(false, "Backtest error: " + e.message);
-    } finally {
-      btn.classList.remove("loading");
-    }
-  }
-
-</script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <style>
     /* ── SAP 72 Brand Font ──────────────────────────────────────────────── */
     @font-face {
@@ -1265,6 +1199,72 @@
   } else {
     loadSHAP("importance");
   }
+
+let backtestChart = null;
+  async function loadBacktest() {
+    if (PREVIEW) return;
+    const btn = document.getElementById("backtest-btn");
+    btn.classList.add("loading");
+    setStatus(false, "Loading 30-day backtest...");
+    try {
+      const r = await fetch(API + "/backtest?days=30");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const d = await r.json();
+      document.getElementById("bt-mae").textContent  = d.mae_gw  + " GW";
+      document.getElementById("bt-mape").textContent = d.mape_pct + "%";
+      document.getElementById("bt-rmse").textContent = d.rmse_gw + " GW";
+      document.getElementById("bt-pts").textContent  = d.n_points;
+      const lbs = d.points.map(p => {
+        const t = new Date(p.timestamp);
+        return String(t.getMonth()+1).padStart(2,"0") + "/" +
+               String(t.getDate()).padStart(2,"0") + " " +
+               String(t.getHours()).padStart(2,"0") + ":00";
+      });
+      const act = d.points.map(p => p.actual_gw);
+      const prd = d.points.map(p => p.predicted_gw);
+      if (backtestChart) {
+        backtestChart.data.labels = lbs;
+        backtestChart.data.datasets[0].data = act;
+        backtestChart.data.datasets[1].data = prd;
+        backtestChart.update();
+      } else {
+        const ctx = document.getElementById("backtest-chart").getContext("2d");
+        backtestChart = new Chart(ctx, {
+          type: "line",
+          data: { labels: lbs, datasets: [
+            { label: "Actual (PJM)", data: act, borderColor: "#8696A9",
+              backgroundColor: "rgba(134,150,169,0.05)", borderWidth: 1.5,
+              pointRadius: 0, tension: 0.25, fill: false },
+            { label: "XGBoost Predicted", data: prd, borderColor: "#0064D9",
+              backgroundColor: "transparent", borderWidth: 2, borderDash: [4,3],
+              pointRadius: 0, tension: 0.25, fill: false }
+          ]},
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            interaction: { mode: "index", intersect: false },
+            plugins: {
+              legend: { position: "top", labels: { font: { size: 12 }, boxWidth: 14, padding: 16 }},
+              tooltip: { backgroundColor: "#FFFFFF", titleColor: "#1D2D3E",
+                bodyColor: "#556B82", borderColor: "#D9DADB", borderWidth: 1, padding: 10,
+                callbacks: { label: function(c) { return c.dataset.label + ": " + c.parsed.y.toFixed(2) + " GW"; }}}
+            },
+            scales: {
+              x: { ticks: { maxTicksLimit: 15, font: { size: 11 }, color: "#8696A9" }, grid: { color: "#F0F1F2" }},
+              y: { title: { display: true, text: "Demand (GW)", font: { size: 12 }, color: "#556B82" },
+                   ticks: { font: { size: 11 }, color: "#8696A9" }, grid: { color: "#F0F1F2" }}
+            }
+          }
+        });
+      }
+      document.getElementById("backtest-card").style.display = "";
+      setStatus(true, "Backtest loaded · MAE " + d.mae_gw + " GW · MAPE " + d.mape_pct + "% · " + new Date().toLocaleTimeString());
+    } catch(e) {
+      setStatus(false, "Backtest error: " + e.message);
+    } finally {
+      btn.classList.remove("loading");
+    }
+  }
+
 </script>
 </body>
 </html>
