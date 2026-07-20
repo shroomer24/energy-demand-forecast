@@ -40,7 +40,6 @@ from contextlib import asynccontextmanager
 sys.path.insert(0, str(Path(__file__).parent.parent))
 warnings.filterwarnings("ignore")
 
-import requests as _http
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -524,82 +523,6 @@ def explain_shap_summary():
 
 
 
-
-@app.post("/forecast/ensemble", response_model=ForecastResponse)
-def forecast_ensemble(req: ForecastRequest):
-    """Average of XGBoost (with intervals) and TabPFN-3 predictions."""
-    xgb_resp   = forecast_intervals(req)
-    xgb_points = [p.dict() for p in xgb_resp.points]
-    try:
-        tabpfn_resp   = forecast_tabpfn(req)
-        tabpfn_points = [p.dict() for p in tabpfn_resp.points]
-    except Exception:
-        return xgb_resp
-    ensemble = []
-    for x, t in zip(xgb_points, tabpfn_points):
-        x_lo = x.get("lower_gw") or x["demand_gw"]
-        x_hi = x.get("upper_gw") or x["demand_gw"]
-        t_lo = t.get("lower_gw") or t["demand_gw"]
-        t_hi = t.get("upper_gw") or t["demand_gw"]
-        ensemble.append({
-            "timestamp": x["timestamp"],
-            "demand_gw": round((x["demand_gw"] + t["demand_gw"]) / 2, 3),
-            "lower_gw":  round((x_lo + t_lo) / 2, 3),
-            "upper_gw":  round((x_hi + t_hi) / 2, 3),
-        })
-    vals          = [p["demand_gw"] for p in ensemble]
-    tabpfn_mape   = _state["tabpfn_metrics"].get("mape") or 0.52
-    ensemble_mape = round((1.52 + tabpfn_mape) / 2, 2)
-    return ForecastResponse(
-        model="Ensemble (XGBoost + TabPFN-3)",
-        generated_at=datetime.utcnow().isoformat(),
-        hours_requested=req.hours,
-        points=[ForecastPoint(**p) for p in ensemble],
-        metrics={
-            "peak_gw":   round(max(vals), 3),
-            "avg_gw":    round(sum(vals) / len(vals), 3),
-            "mape_pct":  ensemble_mape,
-            "model_tag": f"Ensemble · PJM · MAPE ~{ensemble_mape}%",
-        },
-    )
-
-
-@app.get("/actuals")
-def get_actuals(region: str = "PJM", hours: int = 72):
-    """Live hourly actual demand from EIA for any balancing authority.
-    Region codes: PJM, MISO, ERCO, NYIS, CISO, SWPP, ISNE
-    """
-    api_key = os.environ.get("EIA_API_KEY", "")
-    if not api_key:
-        raise HTTPException(status_code=503, detail="EIA_API_KEY not configured")
-    url = "https://api.eia.gov/v2/electricity/rto/region-data/data/"
-    params = {
-        "api_key":              api_key,
-        "frequency":            "hourly",
-        "data[0]":              "value",
-        "facets[respondent][]": region,
-        "facets[type][]":       "D",
-        "sort[0][column]":      "period",
-        "sort[0][direction]":   "desc",
-        "length":               min(hours, 168),
-        "offset":               0,
-    }
-    try:
-        resp = _http.get(url, params=params, timeout=15)
-        resp.raise_for_status()
-        rows = resp.json().get("response", {}).get("data", [])
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"EIA API error: {e}")
-    points = []
-    for row in reversed(rows):
-        try:
-            import pandas as pd
-            ts  = pd.Timestamp(row["period"])
-            val = float(row["value"]) / 1000.0
-            points.append({"timestamp": ts.isoformat(), "demand_gw": round(val, 3), "lower_gw": None, "upper_gw": None})
-        except Exception:
-            continue
-    return {"region": region, "hours": len(points), "points": points}
 
 # Mount static frontend (must be last)
 if FRONTEND_DIR.exists():
