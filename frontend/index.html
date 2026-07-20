@@ -523,6 +523,30 @@
     .pill-ok  { background: var(--sap-green-light);  color: var(--sap-green); }
     .pill-lo  { background: #E1F4FF;                 color: #0070F2; }
 
+    .horizon-pills { display: flex; gap: 4px; }
+    .horizon-btn {
+      padding: 5px 14px; border: 1px solid var(--border);
+      background: var(--content); color: var(--text2);
+      border-radius: 14px; font-size: 12px; font-weight: 600;
+      cursor: pointer; font-family: inherit; transition: all 0.15s;
+    }
+    .horizon-btn:hover { border-color: var(--sap-blue); color: var(--sap-blue); }
+    .horizon-btn.active-horizon { background: var(--sap-blue); border-color: var(--sap-blue); color: #fff; }
+    .region-select {
+      height: 30px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+      background: var(--content); color: var(--text); font-size: 12px;
+      font-family: inherit; padding: 0 8px; cursor: pointer;
+    }
+    .region-select:focus { outline: none; border-color: var(--sap-blue); }
+    .model-btn.active-ensemble { background: var(--sap-green); border-color: var(--sap-green); color: #fff; }
+    .mbadge-ensemble {
+      background: rgba(37,111,58,0.12); color: var(--sap-green);
+      border: 1px solid rgba(37,111,58,0.3); border-radius: 14px;
+      padding: 3px 12px; font-size: 11px; font-weight: 700;
+    }
+    .kpi-card.e-active { border-top-color: var(--sap-green); }
+    .kpi-card.e-active .kpi-value { color: var(--sap-green); }
+
     /* ── Tab Bar ─────────────────────────────────────────────────────────── */
     .tab-bar {
       display: flex;
@@ -638,15 +662,33 @@
       <div class="model-toggle">
         <button class="model-btn active-xgb" id="btn-xgb" onclick="selectModel('xgboost', this)">XGBoost + CI</button>
         <button class="model-btn" id="btn-tabpfn" onclick="selectModel('tabpfn', this)">TabPFN-3</button>
+        <button class="model-btn" id="btn-ensemble" onclick="selectModel('ensemble', this)">Ensemble</button>
       </div>
 
       <div class="toolbar-sep"></div>
 
       <div class="hours-wrap">
         <span class="toolbar-label">Horizon:</span>
-        <input type="number" class="hours-input" id="hours-input" value="72" min="1" max="336" step="24" />
-        <span class="toolbar-label">hours</span>
+        <div class="horizon-pills">
+          <button class="horizon-btn" onclick="selectHorizon(24,this)">24h</button>
+          <button class="horizon-btn" onclick="selectHorizon(48,this)">48h</button>
+          <button class="horizon-btn active-horizon" onclick="selectHorizon(72,this)">72h</button>
+        </div>
       </div>
+
+      <div class="toolbar-sep"></div>
+
+      <span class="toolbar-label">Region:</span>
+      <select class="region-select" id="region-select" onchange="selectRegionFn(this.value)">
+        <option value="none">No overlay</option>
+        <option value="PJM">PJM (model region)</option>
+        <option value="MISO">MISO</option>
+        <option value="ERCO">ERCOT</option>
+        <option value="NYIS">NYISO</option>
+        <option value="CISO">CAISO</option>
+        <option value="SWPP">SPP</option>
+        <option value="ISNE">ISO-NE</option>
+      </select>
 
       <div class="toolbar-sep"></div>
 
@@ -762,7 +804,7 @@
 
   <!-- ── Footer ────────────────────────────────────────────────── -->
   <div class="page-footer">
-    PJM Energy Demand Forecasting &nbsp;·&nbsp; Ram Aligave &nbsp;·&nbsp; UNT Business Analytics 2027 &nbsp;·&nbsp; v1.1.0
+    PJM Energy Demand Forecasting &nbsp;·&nbsp; Ram Aligave &nbsp;·&nbsp; UNT Business Analytics 2027 &nbsp;·&nbsp; v1.3.0
   </div>
 
 </div><!-- /page -->
@@ -776,6 +818,9 @@
   const DAYS    = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
   let chart     = null;
   let activeModel = "xgboost";
+  let selectedHours = 72;
+  let selectedRegion = "none";
+  let actualsData = null;
 
   /* ════════════════════════════════════════════════════════════════
      MOCK DATA GENERATOR
@@ -784,6 +829,21 @@
     const now = new Date();
     now.setMinutes(0, 0, 0);
     const points = [];
+    if (model === "ensemble") {
+      const xgb = mockForecast(hours, "xgboost"), pfn = mockForecast(hours, "tabpfn");
+      const pts = xgb.points.map((p,i) => ({
+        timestamp: p.timestamp,
+        demand_gw: Math.round(((p.demand_gw+pfn.points[i].demand_gw)/2)*100)/100,
+        lower_gw:  Math.round(((p.lower_gw+pfn.points[i].lower_gw)/2)*100)/100,
+        upper_gw:  Math.round(((p.upper_gw+pfn.points[i].upper_gw)/2)*100)/100,
+      }));
+      const vals = pts.map(p=>p.demand_gw);
+      return { model:"Ensemble (XGBoost + TabPFN-3)", generated_at:new Date().toISOString(),
+        hours_requested:hours, points:pts,
+        metrics:{peak_gw:Math.round(Math.max(...vals)*100)/100,
+          avg_gw:Math.round((vals.reduce((a,b)=>a+b,0)/vals.length)*100)/100,
+          mape_pct:1.02, mae_gw:0.535} };
+    }
     // Seed for reproducibility per model
     let seed = model === "tabpfn" ? 42 : 7;
     function rng() { seed = (seed * 1664525 + 1013904223) & 0xffffffff; return (seed >>> 0) / 4294967296; }
@@ -857,7 +917,7 @@
   function selectModel(model, btn) {
     activeModel = model;
 
-    document.querySelectorAll("#btn-xgb, #btn-tabpfn").forEach(b => {
+    document.querySelectorAll("#btn-xgb, #btn-tabpfn, #btn-ensemble").forEach(b => {
       b.className = "model-btn";
     });
     btn.className = "model-btn " + (model === "tabpfn" ? "active-tabpfn" : "active-xgb");
@@ -878,6 +938,23 @@
       badge.className   = "mbadge mbadge-xgb";
     }
 
+    const isEnsemble = model === "ensemble";
+    if (isEnsemble) {
+      btn.className = "model-btn active-ensemble";
+      ["kpi-c0","kpi-c1","kpi-c2","kpi-c3","kpi-c4"].forEach(id => {
+        const el = document.getElementById(id);
+        el.classList.remove("t-active"); el.classList.add("e-active");
+      });
+      const badge = document.getElementById("chart-badge");
+      badge.textContent = "Ensemble"; badge.className = "mbadge mbadge-ensemble";
+      document.getElementById("shap-card").style.display = "none";
+      document.getElementById("card-mape").textContent = "~1.0%";
+      document.getElementById("card-model").textContent = "Ensemble";
+      return;
+    }
+    ["kpi-c0","kpi-c1","kpi-c2","kpi-c3","kpi-c4"].forEach(id =>
+      document.getElementById(id).classList.remove("e-active")
+    );
     // SHAP visibility
     document.getElementById("shap-card").style.display = tActive ? "none" : "";
 
@@ -945,6 +1022,7 @@
     const colorFill = isTabPFN ? "rgba(232,104,53,0.07)" : "rgba(0,100,217,0.07)";
     const colorCI   = isTabPFN ? "rgba(232,104,53,0.18)" : "rgba(0,100,217,0.14)";
 
+    const _existActuals = chart ? chart.data.datasets.filter(d => d._isActuals) : [];
     chart.data.labels   = labels;
     chart.data.datasets = [];
 
@@ -960,6 +1038,7 @@
       });
     }
 
+    chart.data.datasets.push(..._existActuals);
     chart.data.datasets.push({
       label: isTabPFN ? "TabPFN-3 Forecast (GW)" : "XGBoost Forecast (GW)",
       data: mid,
@@ -1046,9 +1125,9 @@
      RUN FORECAST
   ════════════════════════════════════════════════════════════════ */
   async function runForecast() {
-    const hours = parseInt(document.getElementById("hours-input").value) || 72;
+    const hours = selectedHours;
     const btn   = document.getElementById("run-btn");
-    const label = activeModel === "tabpfn" ? "TabPFN-3" : "XGBoost + CI";
+    const label = activeModel === "tabpfn" ? "TabPFN-3" : activeModel === "ensemble" ? "Ensemble" : "XGBoost + CI";
 
     btn.classList.add("loading");
 
@@ -1064,7 +1143,7 @@
       return;
     }
 
-    const endpoint = activeModel === "tabpfn" ? `${API}/forecast/tabpfn` : `${API}/forecast/intervals`;
+    const endpoint = activeModel === "tabpfn" ? `${API}/forecast/tabpfn` : activeModel === "ensemble" ? `${API}/forecast/ensemble` : `${API}/forecast/intervals`;
     setStatus(false, `Fetching ${label} forecast…`);
     try {
       const resp = await fetch(endpoint, {
@@ -1078,6 +1157,7 @@
       renderTable(data.points);
       updateCards(data);
       setStatus(true, `${label} · ${data.points.length} pts · ${new Date().toLocaleTimeString()}`);
+      if (selectedRegion !== "none") loadActuals(selectedRegion, hours);
     } catch(e) {
       setStatus(false, `Error: ${e.message}`);
     } finally {
@@ -1114,6 +1194,37 @@
     }
   }
 
+  function selectHorizon(hours, btn) {
+    selectedHours = hours;
+    document.querySelectorAll(".horizon-btn").forEach(b => b.classList.remove("active-horizon"));
+    btn.classList.add("active-horizon");
+  }
+  function selectRegionFn(region) {
+    selectedRegion = region;
+    if (region === "none" && chart) {
+      chart.data.datasets = chart.data.datasets.filter(d => !d._isActuals);
+      actualsData = null; chart.update();
+    }
+  }
+  async function loadActuals(region, hours) {
+    if (region === "none" || PREVIEW || !chart) return;
+    try {
+      const resp = await fetch(`${API}/actuals?region=${encodeURIComponent(region)}&hours=${hours}`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (!data.points || !data.points.length) return;
+      actualsData = data.points;
+      chart.data.datasets = chart.data.datasets.filter(d => !d._isActuals);
+      chart.data.datasets.push({
+        label: `${region} Actual (EIA)`,
+        data: data.points.map(p => p.demand_gw),
+        borderColor: "#8696A9", borderDash: [5,4],
+        backgroundColor: "transparent", borderWidth: 1.5,
+        pointRadius: 0, tension: 0.3, _isActuals: true,
+      });
+      chart.update();
+    } catch(e) { console.warn("loadActuals:", e); }
+  }
   /* ════════════════════════════════════════════════════════════════
      HEALTH CHECK
   ════════════════════════════════════════════════════════════════ */
