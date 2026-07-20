@@ -427,16 +427,19 @@ def forecast_tabpfn(req: ForecastRequest):
             preds_df["_hour"] = preds_df["timestamp"].dt.hour
             preds_df["_dow"]  = preds_df["timestamp"].dt.dayofweek
             lookup   = preds_df.groupby(["_hour","_dow"])["tabpfn_pred"].mean().to_dict()
-            fallback = float(preds_df["tabpfn_pred"].mean())
-            start_ts = pd.Timestamp.utcnow().floor("h")
-            results  = []
+            fallback  = float(preds_df["tabpfn_pred"].mean())
+            residuals = preds_df["demand_gw"] - preds_df["tabpfn_pred"]
+            p10       = float(np.percentile(residuals, 10))
+            p90       = float(np.percentile(residuals, 90))
+            start_ts  = pd.Timestamp.utcnow().floor("h")
+            results   = []
             for h in range(req.hours):
                 ts   = start_ts + pd.Timedelta(hours=h)
                 pred = lookup.get((ts.hour, ts.dayofweek), fallback)
                 results.append({"timestamp": ts.isoformat(),
                                  "demand_gw": round(float(pred), 3),
-                                 "lower_gw":  None,
-                                 "upper_gw":  None})
+                                 "lower_gw":  round(float(pred) + p10, 3),
+                                 "upper_gw":  round(float(pred) + p90, 3)})
             vals = [p["demand_gw"] for p in results]
             return ForecastResponse(
                 model="TabPFN-3 (pre-computed benchmark)",
