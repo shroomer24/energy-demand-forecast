@@ -992,6 +992,9 @@
   function renderTable(points) {
     const tbody = document.getElementById("forecast-tbody");
     tbody.innerHTML = "";
+    const sorted = [...points].map(p => p.demand_gw).sort((a, b) => a - b);
+    const p25 = sorted[Math.floor(sorted.length * 0.25)];
+    const p75 = sorted[Math.floor(sorted.length * 0.75)];
     points.forEach((p, i) => {
       const d   = new Date(p.timestamp);
       const day = DAYS[d.getDay()];
