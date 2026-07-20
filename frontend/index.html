@@ -521,6 +521,7 @@
 
     .pill-hi  { background: var(--sap-orange-light); color: var(--sap-orange); }
     .pill-ok  { background: var(--sap-green-light);  color: var(--sap-green); }
+    .pill-lo  { background: #E1F4FF;                 color: #0070F2; }
 
     /* ── Tab Bar ─────────────────────────────────────────────────────────── */
     .tab-bar {
@@ -995,9 +996,10 @@
       const d   = new Date(p.timestamp);
       const day = DAYS[d.getDay()];
       const hr  = d.getHours().toString().padStart(2,"0") + ":00";
-      const isHigh = p.demand_gw > 54;
-      const pill   = isHigh
+      const pill = p.demand_gw >= p75
         ? `<span class="pill pill-hi">High load</span>`
+        : p.demand_gw <= p25
+        ? `<span class="pill pill-lo">Low load</span>`
         : `<span class="pill pill-ok">Normal</span>`;
       const lo = p.lower_gw !== null ? p.lower_gw.toFixed(2) : "—";
       const hi = p.upper_gw !== null ? p.upper_gw.toFixed(2) : "—";
