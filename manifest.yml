@@ -1,0 +1,13 @@
+applications:
+  - name: energy-demand-forecast
+    memory: 1G
+    disk_quota: 2G
+    instances: 1
+    buildpacks:
+      - python_buildpack
+    command: uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    path: .
+    env:
+      PYTHONPATH: /home/vcap/app
+      PYTHONUNBUFFERED: "1"
+      TABPFN_USE_API: "1"

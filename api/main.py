@@ -88,6 +88,7 @@ class ModelInfoResponse(BaseModel):
     tabpfn_metrics: dict
     feature_count: int
     last_training_data: Optional[str]
+    tabpfn_client_ready: bool = False
 
 # ---------- Global state ----------
 
@@ -99,6 +100,8 @@ _state = {
     "tabpfn_feature_cols": [],
     "tabpfn_metrics": {},
     "last_ts":        None,
+    "tabpfn_client_ready": False,
+    "tabpfn_regressor":    None,
     "temp_forecast":  {},   # {timestamp_str: temp_f} from Open-Meteo forecast
 }
 
@@ -132,6 +135,19 @@ def _load_models():
             print("[api] TabPFN-3 model loaded.")
         except Exception as e:
             print(f"[api] Could not load TabPFN model: {e}")
+
+    # ── tabpfn-client live inference init ─────────────────────────────────────
+    try:
+        import tabpfn_client as _tpc
+        api_key = os.environ.get("TABPFN_API_KEY") or os.environ.get("TABPFN_TOKEN")
+        if api_key:
+            _tpc.set_access_token(api_key)
+            _state["tabpfn_client_ready"] = True
+            print("[api] tabpfn-client initialised — live inference enabled.")
+        else:
+            print("[api] TABPFN_API_KEY not set — TabPFN will use CSV fallback.")
+    except ImportError:
+        print("[api] tabpfn-client not installed — TabPFN will use CSV fallback.")
 
     # Load demand seed for lag feature priming
     demand_p = _find("demand_seed.csv") or _find("demand.csv")
@@ -332,6 +348,7 @@ def model_info():
         tabpfn_metrics=_state["tabpfn_metrics"],
         feature_count=len(_state["feature_cols"]),
         last_training_data=last_ts,
+        tabpfn_client_ready=bool(_state.get("tabpfn_client_ready", False)),
     )
 
 
@@ -429,7 +446,7 @@ def _forecast_tabpfn_live(req):
     fc = _state["feature_cols"]
     if not fc:
         raise HTTPException(503, "XGBoost feature cols not loaded")
-    df = (pd.read_csv(DATA_PATH, parse_dates=["timestamp"])
+    df = (pd.read_csv(DATA_DIR / "demand.csv", parse_dates=["timestamp"])
             .sort_values("timestamp").reset_index(drop=True))
     N = min(2000, len(df) - 168); te = len(df); ts_ = te - N
     fd = df["demand_gw"].reset_index(drop=True)
@@ -448,7 +465,7 @@ def _forecast_tabpfn_live(req):
     seed = fd.tail(200).reset_index(drop=True)
     test = [_build_feature_row(
                 st + timedelta(hours=h),
-                pd.concat([seed, pd.Series([0.0]*h)], ignore_index=True),
+                pd.concat([seed, pd.Series([float(fd.tail(168).mean())]*h)], ignore_index=True),
                 len(seed)+h)
             for h in range(req.hours)]
     Xt = pd.DataFrame(test)[fc].fillna(0)
@@ -469,10 +486,10 @@ def _forecast_tabpfn_live(req):
 
 
 def _forecast_tabpfn_csv(req):
-    if not TABPFN_PRED_PATH.exists():
+    if not (DATA_DIR / "tabpfn_predictions.csv").exists():
         raise HTTPException(503,
             "TabPFN unavailable. Set TABPFN_API_KEY or run: python src/train_tabpfn.py")
-    df = (pd.read_csv(TABPFN_PRED_PATH, parse_dates=["timestamp"])
+    df = (pd.read_csv(DATA_DIR / "tabpfn_predictions.csv", parse_dates=["timestamp"])
             .sort_values("timestamp").head(req.hours))
     if "demand_mw" in df.columns and "demand_gw" not in df.columns:
         df["demand_gw"] = df["demand_mw"] / 1000.0
@@ -497,11 +514,11 @@ def _forecast_tabpfn_csv(req):
 
 @app.get("/backtest")
 def backtest(days: int = 30):
-    if not DATA_PATH.exists():
+    if not (DATA_DIR / "demand.csv").exists():
         raise HTTPException(503, "demand.csv not found")
     if _state["point_model"] is None:
         raise HTTPException(503, "XGBoost model not loaded")
-    df = (pd.read_csv(DATA_PATH, parse_dates=["timestamp"])
+    df = (pd.read_csv(DATA_DIR / "demand.csv", parse_dates=["timestamp"])
             .sort_values("timestamp").reset_index(drop=True))
     days = min(max(days, 1), 90); n = days * 24
     if len(df) < n + 168:
@@ -510,6 +527,8 @@ def backtest(days: int = 30):
     fd = df["demand_gw"].reset_index(drop=True)
     test = df.iloc[si:].reset_index(drop=True)
     fc = _state["feature_cols"]; mdl = _state["point_model"]
+
+    # ── Oracle backtest (uses actual demand for every lag feature) ────────────
     res = []
     for i, row in test.iterrows():
         feat = _build_feature_row(row["timestamp"], fd, si + i)
@@ -522,16 +541,86 @@ def backtest(days: int = 30):
                     "error_gw":     round(pred - actual, 3)})
     if not res:
         raise HTTPException(422, "Empty test window")
-    ae = [abs(r["error_gw"]) for r in res]
-    ac = [r["actual_gw"]     for r in res]
-    se = [r["error_gw"]**2   for r in res]
+
+    # ── Recursive (72-hour horizon) backtest ──────────────────────────────────
+    # Rolls through the test window in 72-hour chunks.  Within each chunk, lag
+    # features for step h use the model's own prediction from step h-1, not the
+    # true demand — matching how the model actually runs in production.
+    REC_H = 72
+    demand_arr = fd.tolist()
+    rec = []
+    for ws in range(si, len(df), REC_H):
+        we = min(ws + REC_H, len(df))
+        for step in range(we - ws):
+            gidx  = ws + step
+            ts_   = df.iloc[gidx]["timestamp"]
+            act_  = float(df.iloc[gidx]["demand_gw"])
+            feat_ = _build_feature_row(ts_, pd.Series(demand_arr), gidx)
+            X_    = (pd.DataFrame([feat_])[fc] if fc else pd.DataFrame([feat_])).fillna(0)
+            pr_   = float(mdl.predict(X_.values)[0])
+            demand_arr[gidx] = pr_   # feed prediction back as next lag
+            rec.append({"timestamp":    ts_.isoformat(),
+                        "actual_gw":    round(act_, 3),
+                        "predicted_gw": round(pr_,  3),
+                        "error_gw":     round(pr_ - act_, 3)})
+
+    # ── Diebold-Mariano test (oracle vs recursive, squared-error loss) ────────
+    import numpy as _np
+    from scipy import stats as _st
+    e_or  = _np.array([r["error_gw"] for r in res])
+    e_re  = _np.array([r["error_gw"] for r in rec])
+    d     = e_or ** 2 - e_re ** 2          # negative = oracle has lower MSE
+    dm_mean = float(_np.mean(d))
+    dm_se   = float(_np.std(d, ddof=1) / _np.sqrt(len(d)))
+    dm_stat = float(dm_mean / dm_se) if dm_se > 0 else 0.0
+    dm_pval = float(2 * _st.t.sf(abs(dm_stat), df=len(d) - 1))
+    if dm_pval < 0.01 and dm_mean < 0:
+        dm_note = f"Oracle significantly more accurate than 72-h recursive (p<0.0001)"
+    elif dm_pval < 0.05 and dm_mean < 0:
+        dm_note = f"Oracle marginally better than 72-h recursive (p={dm_pval:.4f})"
+    elif dm_pval < 0.05 and dm_mean > 0:
+        dm_note = f"Recursive outperforms oracle backtest (p={dm_pval:.3f})"
+    else:
+        dm_note = f"No significant difference between oracle and 72-h recursive (p={dm_pval:.4f})"
+
+    # ── Summary metrics helper ─────────────────────────────────────────────────
+    def _m(rows):
+        ae = [abs(r["error_gw"]) for r in rows]
+        ac = [r["actual_gw"]     for r in rows]
+        se = [r["error_gw"]**2   for r in rows]
+        return (round(sum(ae)/len(ae), 3),
+                round(sum(a/b*100 for a,b in zip(ae,ac) if b)/len(ae), 2),
+                round((sum(se)/len(se))**.5, 3))
+
+    or_mae,  or_mape,  or_rmse  = _m(res)
+    rec_mae, rec_mape, rec_rmse = _m(rec)
+
     return {"days": days, "n_points": len(res),
-            "mae_gw":   round(sum(ae)/len(ae), 3),
-            "mape_pct": round(sum(a/b*100 for a,b in zip(ae,ac) if b)/len(ae), 2),
-            "rmse_gw":  round((sum(se)/len(se))**.5, 3),
+            "mae_gw": or_mae, "mape_pct": or_mape, "rmse_gw": or_rmse,
+            "recursive_mae_gw":    rec_mae,
+            "recursive_mape_pct":  rec_mape,
+            "recursive_rmse_gw":   rec_rmse,
+            "recursive_horizon_h": REC_H,
+            "dm_statistic": round(dm_stat, 3),
+            "dm_pvalue":    round(dm_pval, 4),
+            "dm_note":      dm_note,
             "window_start": res[0]["timestamp"],
             "window_end":   res[-1]["timestamp"],
             "points": res}
+@app.get("/explain/shap")
+def shap_importance():
+    p = MODELS_DIR / "shap_importance.png"
+    if not p.exists():
+        raise HTTPException(404, "SHAP importance chart not generated — run python3 -m src.explain")
+    return FileResponse(str(p), media_type="image/png")
+
+
+@app.get("/explain/shap/summary")
+def shap_summary():
+    p = MODELS_DIR / "shap_summary.png"
+    if not p.exists():
+        raise HTTPException(404, "SHAP summary chart not generated — run python3 -m src.explain")
+    return FileResponse(str(p), media_type="image/png")
 
 
 # Mount static frontend (must be last)

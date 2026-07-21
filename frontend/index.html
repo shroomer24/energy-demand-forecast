@@ -690,7 +690,7 @@
     <div class="kpi-card" id="kpi-c2">
       <div class="kpi-label">MAPE</div>
       <div class="kpi-value" id="card-mape">1.52%</div>
-      <div class="kpi-sub">Test-set accuracy</div>
+      <div class="kpi-sub">Test-set · 2024 holdout</div>
     </div>
     <div class="kpi-card" id="kpi-c3">
       <div class="kpi-label">Peak GW</div>
@@ -764,6 +764,10 @@
       <div class="bt-kpi"><div class="bt-kpi-val" id="bt-mape">--</div><div class="bt-kpi-label">MAPE</div></div>
       <div class="bt-kpi"><div class="bt-kpi-val" id="bt-rmse">--</div><div class="bt-kpi-label">RMSE</div></div>
       <div class="bt-kpi"><div class="bt-kpi-val" id="bt-pts">--</div><div class="bt-kpi-label">Hours</div></div>
+      <div class="bt-kpi"><div class="bt-kpi-val" id="bt-rec-mae">--</div><div class="bt-kpi-label">Recursive MAE</div></div>
+    </div>
+    <div id="bt-dm-note" style="display:none;font-size:12px;color:#556B82;margin:0 16px 12px;padding:8px 12px;background:#E1F4FF;border-radius:6px;border-left:3px solid #0070F2;"></div>
+    <div style="display:none">
     </div>
     <div class="card-body">
       <div class="chart-wrap"><canvas id="backtest-chart"></canvas></div>
@@ -1214,6 +1218,14 @@ let backtestChart = null;
       document.getElementById("bt-mape").textContent = d.mape_pct + "%";
       document.getElementById("bt-rmse").textContent = d.rmse_gw + " GW";
       document.getElementById("bt-pts").textContent  = d.n_points;
+      if (d.recursive_mae_gw !== undefined) {
+        document.getElementById("bt-rec-mae").textContent = d.recursive_mae_gw + " GW";
+      }
+      if (d.dm_note) {
+        const dmEl = document.getElementById("bt-dm-note");
+        dmEl.textContent = "Diebold-Mariano: " + d.dm_note;
+        dmEl.style.display = "";
+      }
       const lbs = d.points.map(p => {
         const t = new Date(p.timestamp);
         return String(t.getMonth()+1).padStart(2,"0") + "/" +
@@ -1257,7 +1269,8 @@ let backtestChart = null;
         });
       }
       document.getElementById("backtest-card").style.display = "";
-      setStatus(true, "Backtest loaded · MAE " + d.mae_gw + " GW · MAPE " + d.mape_pct + "% · " + new Date().toLocaleTimeString());
+      const recStr = d.recursive_mae_gw !== undefined ? " · Recursive MAE " + d.recursive_mae_gw + " GW" : "";
+      setStatus(true, "Backtest loaded · Oracle MAE " + d.mae_gw + " GW" + recStr + " · " + new Date().toLocaleTimeString());
     } catch(e) {
       setStatus(false, "Backtest error: " + e.message);
     } finally {
