@@ -46,6 +46,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+try:
+    from api import hana_store as _hana
+except Exception:
+    _hana = None
+
 ROOT         = Path(__file__).parent.parent
 MODELS_DIR   = ROOT / "models"   # for Render (pre-exported, tracked in git)
 DATA_DIR     = ROOT / "data"     # for local dev (output of training scripts)
@@ -155,6 +160,12 @@ def _load_models():
         df = pd.read_csv(demand_p, parse_dates=["timestamp"])
         _state["last_ts"] = df["timestamp"].max()
         print(f"[api] Demand seed loaded: last timestamp = {_state['last_ts']}")
+
+    if _hana:
+        hana_ts = _hana.get_latest_timestamp()
+        if hana_ts is not None:
+            _state["last_ts"] = hana_ts
+            print(f"[api] HANA last_ts: {_state['last_ts']}")
 
     # Prefetch Open-Meteo temperature forecast for next 16 days
     _refresh_temp_forecast()
@@ -282,12 +293,32 @@ def _generate_forecast(hours: int, start_ts: pd.Timestamp,
         raise HTTPException(status_code=503, detail="Model not loaded")
 
     history_size = 200
-    demand_p = _find("demand_seed.csv") or _find("demand.csv")
-    if demand_p:
-        df = pd.read_csv(demand_p, parse_dates=["timestamp"])
-        seed = df.sort_values("timestamp").tail(history_size)["demand_gw"].reset_index(drop=True)
-    else:
-        seed = pd.Series([50.0] * history_size)
+    seed = None
+    if _hana:
+        hana_seed = _hana.get_recent_demand(history_size)
+        if hana_seed is not None and len(hana_seed) >= 24:
+            seed = hana_seed.reset_index(drop=True)
+            print(f"[api] Using HANA seed: {len(seed)} rows, latest={seed.iloc[-1]:.2f} GW", flush=True)
+    if seed is None:
+        demand_p = _find("demand_seed.csv") or _find("demand.csv")
+        if demand_p:
+            df = pd.read_csv(demand_p, parse_dates=["timestamp"])
+            seed = df.sort_values("timestamp").tail(history_size)["demand_gw"].reset_index(drop=True)
+            # Bridge gap: if HANA anchor is newer than CSV end, extend seed forward
+            try:
+                csv_last = df["timestamp"].max()
+                anchor   = _state.get("last_ts")
+                if anchor is not None:
+                    gap = max(0, int((pd.Timestamp(anchor) - pd.Timestamp(csv_last)).total_seconds() / 3600))
+                    if gap > 0:
+                        filler = float(seed.tail(24).mean())
+                        extra  = pd.Series([filler] * gap)
+                        seed   = pd.concat([seed.iloc[gap:], extra], ignore_index=True)
+                        print(f"[api] Seed bridged: {gap}h gap filled at {filler:.2f} GW", flush=True)
+            except Exception as _be:
+                print(f"[api] Seed bridge skipped: {_be}", flush=True)
+        else:
+            seed = pd.Series([50.0] * history_size)
 
     demand_history  = seed.copy()
     running_history = demand_history.values.tolist()   # grows with each prediction
@@ -327,6 +358,8 @@ def _generate_forecast(hours: int, start_ts: pd.Timestamp,
             "upper_gw":  round(pred_hi, 3) if pred_hi is not None else None,
         })
 
+    if _hana:
+        _hana.write_forecast_output("PJM_EAST", results)
     return results
 
 
